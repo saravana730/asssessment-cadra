@@ -1,162 +1,225 @@
-#sQuestions
+# Approach
 
-1. Do we have FHIR or Epic api integeration as these softwares charge seperatly for api service
-   (if api integration is available use api for getting information or update in application if not available screen based agent image based to get information update or create may be created as task for clinic employees )
+Delivery approach for a BAA-covered, voice-and-chat patient access agent for clinics.
+Phase 1 targets a single clinic, English and Spanish, read-only operations (no writes).
+Medicare payers are the first vertical: they represent roughly 40% of call volume.
 
-2. the number states 2,800 calls is it per clinc or over all ?
-   if over all architure designed to handle 3000 to 3500 calls if per clinic then design changes to handle 2800X14 = 39200 calls per day
+The companion document [`ARCHITECTURE.md`](./ARCHITECTURE.md) holds the system diagrams
+and component-level detail referenced throughout this document.
 
-3. How missed calls are handled are we dailing back how it's recorded and action taken verified ?
+---
 
-4. how long waiting customers handled hold with queue and average waiting time anouncment
+## 1. Scope and Objectives
 
-5. summary and resolution of each call contact needed ?
+- Conversational assistant reachable by **phone (voice)** and **chat**, sharing one agent definition.
+- **Identity verification** before any PHI is released.
+- **Policy and benefit Q&A** via retrieval-augmented generation (RAG) with citations.
+- **Scheduling and eligibility** support, with write operations gated and confirmed.
+- **Escalation to staff** whenever the agent is not authorized or confident.
+- **No query goes unanswered**: anything the agent cannot resolve becomes a tracked follow-up task.
 
-6. 40% of them are on Medicare or a Medicare Advantage plan.
+Phase 1 deliberately limits scope to make the agent architecture and the chat/call pipeline
+reliable before broadening functionality:
 
-Biggest payer group by far, and it is not one flow. Need 2:
+1. One clinic.
+2. English and Spanish, read-only operations only (no updates in this phase).
+3. Validate and benchmark call accuracy, especially in Spanish.
+4. After-hours handling deferred to a later phase.
 
-- Original Medicare (Parts A & B) - federal, no network, no referral, claims go to the MAC
-- Medicare Advantage (Part C) - private plan, has network + referral + prior auth, benefits change per plan and per year
+---
 
-## Flow A - Original Medicare (Parts A & B)
+## 2. Open Questions for the Client
 
-Payer is Medicare. No network limits, no referrals, prior auth is rare (mostly DME / certain items). Patient pays 20% coinsurance unless a Medigap plan covers it.
+### 2.1 Integrations
 
-agent steps:
+1. **Do we have FHIR or Epic API integration?** These vendors charge separately for API access.
+   - If an API is available, use it to read and update the application directly.
+   - If not, use a screen-based / image-based agent to read information; any update or creation
+     becomes a task for clinic employees to complete.
 
-1. verify member - name, DOB, Medicare number, Part A/B effective dates
-2. confirm clinic accepts Medicare assignment / is taking new Medicare patients
-3. capture secondary coverage - Medigap or Medicaid - billing needs to know who pays the 20%
-4. schedule / route, no referral needed
-5. drugs sit under a separate Part D plan - route drug questions to pharmacy or staff
+### 2.2 Volume and Capacity
 
-escalate to staff: no secondary on a high cost service, Medicare + Medicaid (dual eligible), DME / prior auth items
+2. **Is the 2,800-call figure per clinic or overall?**
+   - If overall: size the architecture for 3,000–3,500 calls per day.
+   - If per clinic: size for approximately 39,200 calls per day (2,800 × 14 clinics).
 
-## Flow B - Medicare Advantage (Part C)
+### 2.3 Call Handling
 
-Payer is a private plan, member card is not the red white blue card. Network, referrals and prior auth all apply.
+3. **Missed calls**: how are they handled? Is there a call-back, how is it recorded, and how is the
+   resulting action verified?
+4. **Wait handling**: are callers placed on hold/queue? Is there an average-wait-time announcement?
+5. **Per-contact output**: is a summary and resolution required for every call/chat contact?
 
-agent steps:
+### 2.4 Commercial
 
-1. capture plan name, plan ID, member ID, group, effective date
-2. verify eligibility - 270/271 real time if we have API or portal, else capture and create task
-3. check in network for this clinic - out of network = stop, route to staff
-4. check referral required (usually PCP referral for specialist) and prior auth for the service
-5. start prior auth, else create a task for clinic employees
-6. schedule / route with the plan recorded on the appointment
+6. **Cost per call/chat per minute**: what is the target? This drives the choice of LLM, ASR, TTS,
+   and STT models against the customer's cost expectations.
 
-escalate to staff: out of network, prior auth required, plan not in our payer list, member id mismatch, DME
+> Payer-specific questions are listed in section 3.4.
 
-## Both flows
+---
 
-- same fields written to EHR for both: payer, plan, member id, group, effective date, secondary payer - one data model, 2 rule sets
-- annual enrollment is Oct 15 - Dec 7 and benefits change every year, so payer rules must be a config table, not hardcoded
-- MA has CMS rules on what we can say (no steering / plan comparison) - scripts need compliance review per flow
+## 3. Medicare Payer Flows
 
-Questions for the client:
-a. the split - how much Original Medicare vs Medicare Advantage, and top MA plans by call volume
-b. do we get real time eligibility (API / portal) or only capture info for staff
-c. who owns prior auth and referral - agent or staff
-d. top 10 payers by volume so the rules can be built and tested
+Medicare is the largest payer group by far (~40% of call volume) and is **not a single flow**. It
+splits into two distinct payers with different rules:
 
-7. what is average cost per call/chat a minute example ?
-   To choose model llm asr tts and stt based of cost customer expect
+- **Original Medicare (Parts A & B)** — federal program. No network, no referrals, prior auth is rare
+  (mainly DME and certain items). Claims go to the MAC.
+- **Medicare Advantage (Part C)** — a private plan. Has network, referral, and prior auth
+  requirements; benefits change per plan and per year.
 
-#Asummtions
+### 3.1 Flow A — Original Medicare (Parts A & B)
 
-1.We assume phone numbers are saved and prefered language is saved so on incoming call based of the data agent language is configured (for cost cutting we may use small models which are good in english /spanish)
-if db not available we choose small models with good accuracy in both english and spanish
+Payer is Medicare. No network limits, no referrals, and prior auth is rare (mostly DME / certain
+items). The patient pays 20% coinsurance unless a Medigap plan covers it.
 
-2.All calls/chats are logged into system agent attended calls/chats resolution provided with it to
-if needed human intervention if it was unable to connect to person (all useres busy) that moment it create task list to call later then later it checks user availibity call patient and connect with them so no calls are query goes unnoticed
+Agent steps:
 
-3.Any patient related queries are not provided in SMS or call before verifying it if it's patient  
-phone number check
-DOB and any one additional personal question from db to verify before providing any phi info in call or chat
+1. Verify member — name, DOB, Medicare number, Part A/B effective dates.
+2. Confirm the clinic accepts Medicare assignment / is taking new Medicare patients.
+3. Capture secondary coverage — Medigap or Medicaid — since billing must know who pays the 20%.
+4. Schedule / route; no referral required.
+5. Drugs fall under a separate Part D plan — route drug questions to pharmacy or staff.
 
-4.Walled LLM with BBA signed or self hosted llm
+Escalate to staff: no secondary coverage on a high-cost service, Medicare + Medicaid (dual eligible),
+DME / prior auth items.
 
-5.PHI information are not passed to llm directly
+### 3.2 Flow B — Medicare Advantage (Part C)
 
-6.data stored in db encrypted like name,contact,dob user can delete their information any time via call or chat if they want
+Payer is a private plan. The member card is not the red-white-blue card. Network, referrals, and
+prior auth all apply.
 
-7.Agent always answer and info it's automated assistant and your call is recorded
+Agent steps:
 
-8.Agents need to escalte transfer or inform patient to call 911 is code red agent should not answer themselves should always transfer or ask them to call 911
+1. Capture plan name, plan ID, member ID, group, effective date.
+2. Verify eligibility — real-time 270/271 if we have API or portal access; otherwise capture the data
+   and create a task.
+3. Check in-network status for this clinic — out of network means stop and route to staff.
+4. Check whether a referral is required (usually a PCP referral for a specialist) and whether prior
+   auth is required for the service.
+5. Start prior auth, or create a task for clinic employees.
+6. Schedule / route with the plan recorded on the appointment.
 
-9. Agent allways summarize and get confirmation before doing any change operation
+Escalate to staff: out of network, prior auth required, plan not in our payer list, member ID
+mismatch, DME.
 
-10. For any Appointment authroize and check eligibilty for creating appointment
+### 3.3 Both Flows
 
-Solution design
+- The **same fields** are written to the EHR for both payers: payer, plan, member ID, group, effective
+  date, secondary payer. One data model, two rule sets.
+- Annual enrollment runs **Oct 15 – Dec 7**, and benefits change every year. Payer rules must therefore
+  be a **configuration table**, not hardcoded logic.
+- Medicare Advantage is subject to **CMS rules** on what we may say (no steering, no plan comparison).
+  Scripts require compliance review per flow.
 
-Serverless container based cloud architecture BBA signed from provider for scaling large volume of calls
+### 3.4 Payer-Specific Questions for the Client
 
-Tech stack
-Python
-Fast API websocket
-Celery Queues and jobs
-Haystack/Langchain/custom Agent builder
-Redis(session storage)
-Postgres (Source of truth)
-React (Portal)
-Quadrant vector DB (Policy documents are ingested so can answer directly with reading entier file)
-S3/same server to Store Audio still BBA signed
-Telecom provider like twilio etc
+a. The split — how much Original Medicare versus Medicare Advantage, and the top MA plans by call volume.
+b. Do we get real-time eligibility (API / portal), or do we only capture information for staff?
+c. Who owns prior auth and referral — the agent or staff?
+d. The top 10 payers by volume, so payer rules can be built and tested.
 
-Agents
+---
 
-Tools & Prompts setup are common for both chat and voice
-so this makes setup reuseable agents for future purpose
+## 4. Assumptions
 
-Chat will be SSE so api can emit thinking processing events before actual answer
-Pipeline simple
-question sent
+1. **Language and identity pre-load.** Patient phone number and preferred language are stored, so an
+   inbound call configures the agent language from that record. To control cost, use small models that
+   are strong in English and Spanish. If no database record exists, default to small bilingual models
+   with good accuracy in both languages.
+2. **Every contact is logged and resolved.** All calls/chats are logged with the resolution provided.
+   If human intervention is needed and staff are unavailable, the system creates a follow-up task; it
+   later checks staff availability, calls the patient, and connects them, so no call or query goes
+   unnoticed.
+3. **No PHI before verification.** No patient-related information is provided over call, chat, or SMS
+   until identity is verified: phone number match, DOB, and one additional personal question from the
+   database.
+4. **Compliant LLM.** Use a walled (walled-garden) LLM under a signed BAA, or a self-hosted LLM.
+5. **PHI is not passed to the LLM directly.**
+6. **Data protection.** Stored data (name, contact, DOB) is encrypted at rest; users can request
+   deletion of their information at any time via call or chat.
+7. **Disclosure.** The agent always states that it is an automated assistant and that the call is
+   recorded.
+8. **Emergencies (code red).** The agent must not attempt to handle emergencies itself; it always
+   transfers or instructs the patient to call 911.
+9. **Confirm before changing.** The agent always summarizes and obtains confirmation before performing
+   any change operation.
+10. **Appointment authorization.** Any appointment creation requires authorization and an eligibility
+    check.
 
-llm generate answer answer mean time tool call and thinking events are emitted to keep user intreactive
+---
 
-chat turns are limited not all turns sent
+## 5. Solution Design
 
-Query rewritten
+Serverless, container-based cloud architecture with a BAA signed with the provider, sized to scale to
+large call volumes.
 
-after n number of turn summary generated for older chats
+### 5.1 Tech Stack
 
-Citations Added for RAG based Q/A
+| Layer | Choice |
+| --- | --- |
+| Infrastructure | Serverless containers on a cloud with a signed BAA; horizontal scaling |
+| Backend | Python, FastAPI (WebSocket for voice, SSE for chat) |
+| Async processing | Celery (queues and jobs) |
+| Agent framework | Haystack / LangChain / custom agent builder |
+| Session storage | Redis |
+| Source of truth | Postgres |
+| Portal | React |
+| Vector / RAG | Quadrant vector DB (policy documents ingested, answers read from the full file) |
+| Object storage | S3 (or same server) for call audio, BAA-signed |
+| Telephony | Twilio or equivalent |
 
-Calls will be websocket based
-each call first check if patient in db if yes
-pick preferd language and talk in it
+### 5.2 Reusable Agent Layer
 
-Pipline consist of
-LLM Large Language model
-TTS text to speech
-SST speech to text
+- **Tools and prompts are shared between chat and voice**, so agents are reusable for future purposes.
+- New agents are added as definitions (prompt, tools, guardrails, flow config) rather than new services.
+- Payer-specific behaviour (Original Medicare vs Medicare Advantage) is a flow configuration, not
+  branching code.
 
-AUDIO processed in parllel websockt connected with VAD
-when ever speech starts and stop like full stop sent to stt and added  
-sent to llm mean time stil listens once user stop speaking
-everything is processed together and sent to tts and answerd this way low latency is achived
+### 5.3 Chat Pipeline (SSE)
 
-all turns are stored in redis per session not every turn updated in postgres db to avoid increase in latency and minimize db hits instead we write batch updates
+- Delivered over **SSE** so the API can emit thinking/processing events before the final answer.
+- On a question: the LLM generates the answer while tool calls and thinking events are emitted to keep
+  the user engaged.
+- Chat turns are limited — not all turns are sent to the model.
+- Queries are **rewritten** before processing.
+- After N turns, a **summary** is generated for older turns.
+- **Citations** are added for RAG-based Q&A.
 
-Agent Level
+### 5.4 Voice Pipeline (WebSocket)
 
-All actions logged with reason and citations to debug (dev only) for production minimized version not all log
+- Calls are WebSocket-based. On each call, check first whether the patient is in the database; if so,
+  pick the preferred language and converse in it.
+- Pipeline consists of **LLM** (large language model), **TTS** (text to speech), and **STT** (speech to text).
+- Audio is processed in a parallel WebSocket connected to **VAD**:
+  - When speech starts and stops (a full stop), the utterance is sent to STT and appended.
+  - It is sent to the LLM while the system keeps listening once the user stops speaking.
+  - Everything is processed together and sent to TTS, so low latency is achieved.
+- All turns are stored in **Redis per session** rather than updating Postgres every turn, to avoid added
+  latency and minimize database hits. Postgres is updated in batches instead.
 
-Gaurd Rails Adedd for fetch data from DB or any API
+### 5.5 Agent-Level Governance
 
-DB access is not provided directly Instead API with restricted access to particular user in call
+- All actions are logged with reason and citations for debugging (**dev only**); production keeps a
+  minimized version, not full logs.
+- **Guardrails** are applied to any data fetched from the database or an API.
+- The agent is never given direct database access. Access is via an API with permissions restricted to
+  the particular user in the call.
 
-Architecture Diagram
-[Read Documentation](./ARCHITECTURE.md)
+### 5.6 Architecture Reference
 
-Eight-week scope
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the system context, voice and chat sequence diagrams,
+data/compliance tables, and scaling notes.
 
-1.setup system for one clinc
-2.English and Spanish Read only operations no updates for now
-3.Check and validate calls and accuracy on spanish
-4.After Hours calls can be Done in next phase
-As we will be focused on setuping up agent architecture chat and call pipeline first
-Benchmark spanish accuracy
-Testing and 2 to 3 iteration to get it to better shape
+---
+
+## 6. Delivery Plan — Eight-Week Scope
+
+1. Set up the system for one clinic.
+2. English and Spanish, **read-only** operations (no updates yet).
+3. Check and validate calls and accuracy in Spanish.
+4. Defer after-hours calls to a later phase.
+
+Rationale: focus the first phase on standing up the agent architecture and the chat/call pipeline,
+benchmark Spanish accuracy, and run two to three iterations to reach a solid baseline.
